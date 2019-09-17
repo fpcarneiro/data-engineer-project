@@ -108,3 +108,6 @@ airport-codes_csv.csv
 I94_SAS_Labels_Descriptions.SAS
 immigration_data_sample.csv
 us-cities-demographics.csv
+
+# VS code
+/.vscode
