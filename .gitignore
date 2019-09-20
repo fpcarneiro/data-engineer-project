@@ -111,3 +111,6 @@ us-cities-demographics.csv
 
 # VS code
 /.vscode
+
+# data
+/data
