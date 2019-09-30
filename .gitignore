@@ -114,3 +114,6 @@ us-cities-demographics.csv
 
 # data
 /data
+
+# configuration
+*.cfg
