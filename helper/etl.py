@@ -1,8 +1,10 @@
 import os
 import configparser
+from datetime import timedelta, datetime
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import udf, col
-from pyspark.sql.functions import year, month, dayofmonth, hour, weekofyear, date_format
+from pyspark.sql.types import StructField, StructType, IntegerType, DoubleType
+from pyspark.sql.functions import year, month, dayofmonth, hour, weekofyear, date_format, to_date
 
 config = configparser.ConfigParser()
 config.read('dl.cfg')
@@ -54,11 +56,14 @@ def save(df, output_path, mode = "overwrite", output_format = "parquet", columns
         partitionBy (:obj:`list`): Names of partitioning columns. The default value None means 'no partitions'.
         options: All other string options.
     """
-    
+
     df.select(columns).write.save(output_path, mode= mode, format=output_format, partitionBy = partitionBy, **options)
     
 def etl_immigration_data(spark, input_path="immigration_data_sample.csv", output_path="out/immigration.parquet", 
-                         input_format = "csv", columns = '*', load_size = None, partitionBy = ["i94yr", "i94mon"], header=True, **options):
+                         input_format = "csv", columns = ['i94addr', 'i94mon','cicid','i94visa','i94res','arrdate','i94yr','depdate',
+                                                          'airline', 'fltno', 'i94mode', 'i94port', 'dtadfile', 'visatype', 'gender', 
+                                                          'i94cit', 'i94bir'], 
+                         load_size = None, partitionBy = ["i94yr", "i94mon"], header=True, **options):
     """
     This function reads the songs JSON files from S3 and processes them with Spark. We separate the files into specific dataframes the represent the tables in our star schema model.
     Then, these tables are saved back to the output folder indicated by output_data parameter.
@@ -71,6 +76,22 @@ def etl_immigration_data(spark, input_path="immigration_data_sample.csv", output
     """   
     immigration = read_data(spark, input_path=input_path, input_format=input_format, 
                             columns=columns, debug_size = load_size, header=header, **options)
+    
+    int_cols = ['cicid', 'i94yr', 'i94mon', 'i94cit', 'i94res', 
+        'arrdate', 'i94mode', 'i94bir', 'i94visa', 'count', 'biryear', 'dtadfile', 'depdate']
+    
+    date_cols = ['arrdate', 'depdate']
+    
+    high_null = ["visapost", "occup", "entdepu", "insnum"]
+    not_useful_cols = ["count", "entdepa", "entdepd", "matflag", "dtaddto", "biryear", "admnum"]
+    
+    immigration = cast_integer(immigration, dict(zip(int_cols, len(int_cols)*[IntegerType()])))
+    
+    immigration = convert_sas_date(immigration, date_cols)
+    
+    immigration = immigration.drop(*high_null)
+    immigration = immigration.drop(*not_useful_cols)
+    
     save(df=immigration, output_path=output_path, partitionBy = partitionBy)
     return immigration
 
@@ -95,3 +116,16 @@ def etl_demographics_data(spark, input_path="us-cities-demographics.csv", output
                             columns=columns, debug_size = load_size, header=header, sep=sep, **options)    
     save(df=demographics, output_path=output_path, partitionBy = partitionBy)
     return demographics
+
+def cast_integer(df, cols):
+    for k,v in cols.items():
+        if k in df.columns:
+            df = df.withColumn(k, df[k].cast(v))
+    return df
+
+def convert_sas_date(df, cols):
+    for c in [c for c in cols if c in df.columns]:
+        df = df.withColumn(c, convert_sas_udf(df[c]))
+    return df
+
+convert_sas_udf = udf(lambda x: x if x is None else (timedelta(days=x) + datetime(1960, 1, 1)).strftime("%Y-%m-%d"))
