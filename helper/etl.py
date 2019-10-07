@@ -2,9 +2,8 @@ import os, re
 import configparser
 from datetime import timedelta, datetime
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import udf, col, when, lower, isnull
+from pyspark.sql.functions import udf, col, when, lower, isnull, year, month, dayofmonth, hour, weekofyear, dayofweek, date_format, to_date
 from pyspark.sql.types import StructField, StructType, IntegerType, DoubleType
-from pyspark.sql.functions import year, month, dayofmonth, hour, weekofyear, date_format, to_date
 
 date_format = "%Y-%m-%d"
 
@@ -61,11 +60,12 @@ def save(df, output_path, mode = "overwrite", output_format = "parquet", columns
 
     df.select(columns).write.save(output_path, mode= mode, format=output_format, partitionBy = partitionBy, **options)
     
-def etl_immigration_data(spark, input_path="immigration_data_sample.csv", output_path="out/immigration.parquet", 
+def etl_immigration_data(spark, input_path="immigration_data_sample.csv", output_path="out/immigration.parquet",
+                         date_output_path="out/date.parquet",
                          input_format = "csv", columns = ['i94addr', 'i94mon','cicid','i94visa','i94res','arrdate','i94yr','depdate',
                                                           'airline', 'fltno', 'i94mode', 'i94port', 'visatype', 'gender', 
                                                           'i94cit', 'i94bir'], 
-                         load_size = None, partitionBy = ["i94yr", "i94mon"], header=True, **options):
+                         load_size = None, partitionBy = ["i94yr", "i94mon"], columns_to_save='*', header=True, **options):
     """
     This function reads the songs JSON files from S3 and processes them with Spark. We separate the files into specific dataframes the represent the tables in our star schema model.
     Then, these tables are saved back to the output folder indicated by output_data parameter.
@@ -95,8 +95,22 @@ def etl_immigration_data(spark, input_path="immigration_data_sample.csv", output
     immigration = immigration.drop(*not_useful_cols)
     
     immigration = immigration.withColumn('stay', date_diff_udf(immigration.arrdate, immigration.depdate))
+    immigration = cast_type(immigration, {'stay': IntegerType()})
     
-    save(df=immigration, output_path=output_path, partitionBy = partitionBy)
+    if date_output_path is not None:
+        arrdate = immigration.select('arrdate').distinct()
+        depdate = immigration.select('depdate').distinct()
+        dates = arrdate.union(depdate)
+        dates = dates.withColumn("date", to_date(dates.arrdate, date_format))
+        dates = dates.withColumn("year", year(dates.date))
+        dates = dates.withColumn("month", month(dates.date))
+        dates = dates.withColumn("day", dayofmonth(dates.date))
+        dates = dates.withColumn("weekofyear", weekofyear(dates.date))
+        dates = dates.withColumn("dayofweek", dayofweek(dates.date))
+        save(df=dates.select("date", "year", "month", "day", "weekofyear", "dayofweek"), output_path=date_output_path)
+    
+    if output_path is not None:
+        save(df=immigration.select(columns_to_save), output_path=output_path, partitionBy = partitionBy)
     return immigration
 
 def etl_temperature_data(spark, input_path="../../data2/GlobalLandTemperaturesByCity.csv", output_path="out/temperature.parquet", 
@@ -140,11 +154,11 @@ def etl_demographics_data(spark, input_path="us-cities-demographics.csv", output
     .withColumnRenamed('first(Foreign-born)', 'ForeignBorn')\
     .withColumnRenamed('first(Average Household Size)', 'AverageHouseholdSize')\
     .withColumnRenamed('Hispanic or Latino', 'HispanicOrLatino')\
-    .withColumnRenamed('Black or African-American', 'BlackOrAfrican-American')\
+    .withColumnRenamed('Black or African-American', 'BlackOrAfricanAmerican')\
     .withColumnRenamed('American Indian and Alaska Native', 'AmericanIndianAndAlaskaNative')
     
     numeric_cols = ['TotalPopulation', 'FemalePopulation', 'MedianAge', 'NumberVeterans', 'ForeignBorn', 'MalePopulation', 'AverageHouseholdSize',
-                    'AmericanIndianAndAlaskaNative', 'Asian', 'BlackOrAfrican-American', 'HispanicOrLatino', 'White']
+                    'AmericanIndianAndAlaskaNative', 'Asian', 'BlackOrAfricanAmerican', 'HispanicOrLatino', 'White']
     demographics = demographics.fillna(0, numeric_cols)
     
     if output_path is not None:
@@ -154,7 +168,7 @@ def etl_demographics_data(spark, input_path="us-cities-demographics.csv", output
 
 def etl_states_data(spark, output_path="out/state.parquet"):
     cols = ['TotalPopulation', 'FemalePopulation', 'MalePopulation', 'NumberVeterans', 'ForeignBorn', 
-            'AmericanIndianAndAlaskaNative', 'Asian', 'BlackOrAfrican-American', 'HispanicOrLatino', 'White']
+            'AmericanIndianAndAlaskaNative', 'Asian', 'BlackOrAfricanAmerican', 'HispanicOrLatino', 'White']
     
     demographics = etl_demographics_data(spark, output_path=None)
     states = demographics.groupby(["State Code", "State"]).agg(dict(zip(cols, len(cols)*["sum"])))
@@ -165,7 +179,7 @@ def etl_states_data(spark, output_path="out/state.parquet"):
     addr = addr.withColumn("State", when(isnull(addr["State"]), capitalize_udf(addr['State Original'])).otherwise(addr["State"]))
     addr = addr.drop('State Original', 'State Code')
     
-    cols = ['sum(BlackOrAfrican-American)', 'sum(White)', 'sum(AmericanIndianAndAlaskaNative)',
+    cols = ['sum(BlackOrAfricanAmerican)', 'sum(White)', 'sum(AmericanIndianAndAlaskaNative)',
             'sum(HispanicOrLatino)', 'sum(Asian)', 'sum(NumberVeterans)', 'sum(ForeignBorn)', 'sum(FemalePopulation)', 
             'sum(MalePopulation)', 'sum(TotalPopulation)']
     
@@ -206,7 +220,8 @@ def etl_countries_data(spark, input_path="../../data2/GlobalLandTemperaturesByCi
     res = res.withColumn("Country", when(isnull(res["Country"]), capitalize_udf(res.I94CTRY)).otherwise(res["Country"]))   
     res = res.drop("I94CTRY", "Country_Lower")
     
-    save(df=res, output_path=output_path)
+    if output_path is not None:
+        save(df=res, output_path=output_path)
     return res
 
 def cast_type(df, cols):
