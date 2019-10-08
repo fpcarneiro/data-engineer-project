@@ -22,7 +22,7 @@ CREATE TABLE public.immigration (
 );
 
 CREATE TABLE public.country (
-	Code varchar,
+	Code int4,
 	Country varchar,
 	Temperature float,
 	Latitude varchar,
@@ -47,7 +47,7 @@ CREATE TABLE public.state (
 );
 
 CREATE TABLE public."date" (
-	"date" date NOT NULL,
+	"date" varchar NOT NULL,
 	"day" int4,
 	"month" int4,
 	"year" int4,
