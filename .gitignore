@@ -117,3 +117,6 @@ us-cities-demographics.csv
 
 # configuration
 *.cfg
+
+# power point
+*.pptx
